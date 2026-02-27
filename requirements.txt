@@ -1,0 +1,3 @@
+# Pinocchio — Multimodal Self-Evolving Agent
+# Uses Qwen2.5-Omni via OpenAI-compatible API (DashScope)
+openai>=1.0.0
