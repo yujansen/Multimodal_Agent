@@ -1,5 +1,8 @@
 # 🎭 Pinocchio — 多模态自进化智能体
 
+[![Author](https://img.shields.io/badge/Author-Jansen%20Yu-blue)](https://github.com/yujansen)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 > *"每一次对话都让我变得更好。"*
 
 Pinocchio 是一个具备**持续自我学习与自我改进能力**的多模态智能体系统。它通过结构化的六阶段认知循环，在每次交互后提炼经验、消化教训、优化策略，实现真正的持续进化。
@@ -432,4 +435,10 @@ print(agent.status())
 
 ## 📄 许可证
 
-MIT
+本项目采用 [MIT License](LICENSE) 开源。
+
+---
+
+## 👤 作者与维护者
+
+**Jansen Yu** — [@yujansen](https://github.com/yujansen)
