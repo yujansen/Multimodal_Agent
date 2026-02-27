@@ -44,6 +44,7 @@ Skills / Capabilities (as the Orchestrator)
 from __future__ import annotations
 
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from pinocchio.agents.perception_agent import PerceptionAgent
@@ -65,6 +66,7 @@ from pinocchio.multimodal.audio_processor import AudioProcessor
 from pinocchio.multimodal.video_processor import VideoProcessor
 from pinocchio.utils.llm_client import LLMClient
 from pinocchio.utils.logger import PinocchioLogger
+from pinocchio.utils.resource_monitor import ResourceMonitor
 
 
 class Pinocchio:
@@ -90,6 +92,8 @@ class Pinocchio:
         base_url: str | None = None,
         data_dir: str = "data",
         verbose: bool = True,
+        max_workers: int | None = None,
+        parallel_modalities: bool = True,
     ) -> None:
         # Shared infrastructure
         self.llm = LLMClient(model=model, api_key=api_key, base_url=base_url)
@@ -110,11 +114,32 @@ class Pinocchio:
         self.audio_proc = AudioProcessor(self.llm, self.memory, self.logger)
         self.video_proc = VideoProcessor(self.llm, self.memory, self.logger)
 
+        # Resource detection & parallelism
+        self._resource_monitor = ResourceMonitor()
+        self._resources = self._resource_monitor.snapshot()
+        self._max_workers = max_workers or self._resources.recommended_workers
+        self._parallel_modalities = parallel_modalities
+
         # Session state
         self.user_model = UserModel()
         self.conversation_history: list[dict[str, str]] = []
         self._interaction_count = 0
         self._verbose = verbose
+
+        # Log detected hardware
+        if verbose:
+            r = self._resources
+            gpu_label = (
+                f"{r.gpus[0].name} ({r.total_vram_mb:,} MB VRAM)"
+                if r.has_gpu else "none"
+            )
+            self.logger.log(
+                AgentRole.ORCHESTRATOR,
+                f"Hardware: {r.cpu_count_physical} cores, "
+                f"{r.ram_total_mb:,} MB RAM, GPU: {gpu_label} | "
+                f"Workers: {self._max_workers}, "
+                f"Parallel modalities: {self._parallel_modalities}",
+            )
 
     # ------------------------------------------------------------------
     # External API
@@ -187,6 +212,7 @@ class Pinocchio:
 
     def status(self) -> dict[str, Any]:
         """Return a summary of the agent's current state."""
+        self._resources = self._resource_monitor.snapshot(refresh=True)
         return {
             "interaction_count": self._interaction_count,
             "memory_summary": self.memory.summary(),
@@ -196,6 +222,7 @@ class Pinocchio:
                 "style": self.user_model.style.value,
                 "interests": self.user_model.domains_of_interest,
             },
+            "resources": self._resources.to_dict(),
         }
 
     # ------------------------------------------------------------------
@@ -205,8 +232,14 @@ class Pinocchio:
     def _run_cognitive_loop(self, user_input: MultimodalInput) -> AgentMessage:
         """Execute the full PERCEIVE → STRATEGIZE → EXECUTE → EVALUATE → LEARN pipeline."""
 
+        # Phase 0: PREPROCESS MODALITIES (parallel)
+        modality_context = self._preprocess_modalities(user_input)
+
         # Phase 1: PERCEIVE
-        perception = self.perception.run(user_input=user_input)
+        perception = self.perception.run(
+            user_input=user_input,
+            modality_context=modality_context,
+        )
 
         # Phase 2: STRATEGIZE
         strategy = self.strategy.run(perception=perception)
@@ -216,6 +249,7 @@ class Pinocchio:
             user_input=user_input,
             perception=perception,
             strategy=strategy,
+            modality_context=modality_context,
         )
 
         # Phase 4: EVALUATE
@@ -257,3 +291,81 @@ class Pinocchio:
         )
 
         return response
+
+    # ------------------------------------------------------------------
+    # Internal: Parallel Modality Preprocessing
+    # ------------------------------------------------------------------
+
+    def _preprocess_modalities(self, user_input: MultimodalInput) -> dict[str, str]:
+        """Pre-process non-text modalities in parallel.
+
+        When the user sends images + audio + video simultaneously, each
+        modality processor runs in its own thread.  The resulting text
+        descriptions are returned as a dict keyed by modality name so
+        downstream agents can incorporate them.
+        """
+        tasks: dict[str, tuple[Any, dict[str, Any]]] = {}
+
+        if user_input.image_paths:
+            tasks["vision"] = (
+                self.vision_proc,
+                {"task": "Describe the image(s) in detail", "image_paths": user_input.image_paths},
+            )
+        if user_input.audio_paths:
+            tasks["audio"] = (
+                self.audio_proc,
+                {"task": "Transcribe and analyse the audio", "audio_paths": user_input.audio_paths},
+            )
+        if user_input.video_paths:
+            tasks["video"] = (
+                self.video_proc,
+                {
+                    "task": "Analyse the video content",
+                    "video_paths": user_input.video_paths,
+                    "vision_processor": self.vision_proc,
+                    "audio_processor": self.audio_proc,
+                },
+            )
+
+        if not tasks:
+            return {}
+
+        # Sequential or parallel depending on config & worker count
+        n_tasks = len(tasks)
+        use_parallel = self._parallel_modalities and self._max_workers > 1 and n_tasks > 1
+
+        if use_parallel:
+            self.logger.log(
+                AgentRole.ORCHESTRATOR,
+                f"Parallel modality preprocessing: {list(tasks.keys())} "
+                f"({self._max_workers} workers)",
+            )
+            results: dict[str, str] = {}
+            with ThreadPoolExecutor(
+                max_workers=min(self._max_workers, n_tasks),
+                thread_name_prefix="modality",
+            ) as pool:
+                futures = {
+                    pool.submit(proc.run, **kwargs): name
+                    for name, (proc, kwargs) in tasks.items()
+                }
+                for fut in as_completed(futures):
+                    name = futures[fut]
+                    try:
+                        results[name] = fut.result()
+                    except Exception as exc:
+                        self.logger.error(
+                            AgentRole.ORCHESTRATOR,
+                            f"Modality '{name}' failed: {exc}",
+                        )
+                        results[name] = f"(error processing {name})"
+            return results
+
+        # Sequential fallback
+        self.logger.log(
+            AgentRole.ORCHESTRATOR,
+            f"Sequential modality preprocessing: {list(tasks.keys())}",
+        )
+        return {
+            name: proc.run(**kwargs) for name, (proc, kwargs) in tasks.items()
+        }

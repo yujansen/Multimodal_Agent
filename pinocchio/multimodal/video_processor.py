@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -145,17 +146,30 @@ class VideoProcessor(BaseAgent):
     # ------------------------------------------------------------------
 
     def _run_native(self, task: str, video_paths: list[str]) -> str:
-        """Send video directly to Qwen2.5-Omni via ``build_video_message``."""
+        """Send video directly to Qwen2.5-Omni via ``build_video_message``.
+
+        Multiple videos are processed in parallel threads.
+        """
         self._log("Using native video input (Qwen2.5-Omni)")
-        all_descriptions: list[str] = []
-        for vp in video_paths:
+
+        def _process_one(vp: str) -> str:
             video_msg = self.llm.build_video_message(text=f"Task: {task}", video_urls=[vp])
             messages = [
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 video_msg,
             ]
-            result = self.llm.chat(messages)
-            all_descriptions.append(result)
+            return self.llm.chat(messages)
+
+        if len(video_paths) == 1:
+            all_descriptions = [_process_one(video_paths[0])]
+        else:
+            self._log(f"Parallel processing {len(video_paths)} videos")
+            with ThreadPoolExecutor(max_workers=min(4, len(video_paths))) as pool:
+                futures = {pool.submit(_process_one, vp): i for i, vp in enumerate(video_paths)}
+                all_descriptions = [""] * len(video_paths)
+                for fut in as_completed(futures):
+                    all_descriptions[futures[fut]] = fut.result()
+
         final = "\n\n---\n\n".join(all_descriptions)
         self._log(f"Video analysis complete -- {len(final)} chars")
         return final
@@ -171,25 +185,50 @@ class VideoProcessor(BaseAgent):
         vision_processor: Any,
         audio_processor: Any,
     ) -> str:
-        """Extract frames + audio via ffmpeg and delegate to sub-processors."""
+        """Extract frames + audio via ffmpeg and delegate to sub-processors.
+
+        Frame analysis and audio analysis run in parallel threads.
+        """
         self._log("Using fallback path (ffmpeg + sub-processors)")
         all_descriptions: list[str] = []
 
         for vp in video_paths:
-            # --- Extract and analyse frames ---
+            # --- Launch frame extraction and audio extraction concurrently ---
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="video-extract") as pool:
+                frame_future = pool.submit(self.extract_frames, vp)
+                audio_future = pool.submit(self.extract_audio, vp)
+                frames = frame_future.result()
+                audio_path = audio_future.result()
+
+            # --- Analyse frames in parallel ---
             frame_descs: list[str] = []
-            frames = self.extract_frames(vp)
             if frames and vision_processor:
-                for i, frame in enumerate(frames):
+                def _analyse_frame(idx_frame: tuple[int, str]) -> str:
+                    i, frame = idx_frame
                     desc = vision_processor.run(
                         task=f"Describe frame {i+1} of the video in detail",
                         image_paths=[frame],
                     )
-                    frame_descs.append(f"[Frame {i+1}] {desc}")
+                    return f"[Frame {i+1}] {desc}"
 
-            # --- Extract and analyse audio ---
+                if len(frames) == 1:
+                    frame_descs = [_analyse_frame((0, frames[0]))]
+                else:
+                    self._log(f"Parallel analysis of {len(frames)} frames")
+                    with ThreadPoolExecutor(
+                        max_workers=min(4, len(frames)),
+                        thread_name_prefix="frame-analysis",
+                    ) as pool:
+                        futures = {
+                            pool.submit(_analyse_frame, (i, f)): i
+                            for i, f in enumerate(frames)
+                        }
+                        frame_descs = [""] * len(frames)
+                        for fut in as_completed(futures):
+                            frame_descs[futures[fut]] = fut.result()
+
+            # --- Analyse audio (may already be done if few frames) ---
             audio_desc = ""
-            audio_path = self.extract_audio(vp)
             if audio_path and audio_processor:
                 audio_desc = audio_processor.run(
                     task="Transcribe and describe the audio content",

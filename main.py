@@ -29,6 +29,8 @@ def main() -> None:
         base_url=cfg.base_url,
         data_dir=cfg.data_dir,
         verbose=cfg.verbose,
+        max_workers=cfg.max_workers,
+        parallel_modalities=cfg.parallel_modalities,
     )
 
     print(agent.greet())

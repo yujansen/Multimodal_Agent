@@ -5,6 +5,11 @@ vLLM, etc.) with structured retry, token counting, and multimodal
 message construction.
 
 Default backend: Qwen2.5-Omni via local Ollama server.
+
+Performance features:
+- HTTP connection pooling via httpx (reuses TCP connections)
+- Thread-safe: safe to call from multiple parallel workers
+- Configurable timeout and retry
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+import httpx
 import openai
 
 _DEFAULT_MODEL = os.getenv("PINOCCHIO_MODEL", "qwen2.5-omni")
@@ -47,13 +53,30 @@ class LLMClient:
         base_url: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        timeout: float = 120.0,
+        max_retries: int = 2,
     ) -> None:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+
+        resolved_key = api_key or os.getenv("OLLAMA_API_KEY", "ollama")
+        resolved_url = base_url or _DEFAULT_BASE_URL
+
+        # Pooled HTTP client — reuses TCP connections across threads
+        http_client = httpx.Client(
+            timeout=httpx.Timeout(timeout, connect=10.0),
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30.0,
+            ),
+        )
         self._client = openai.OpenAI(
-            api_key=api_key or os.getenv("OLLAMA_API_KEY", "ollama"),
-            base_url=base_url or _DEFAULT_BASE_URL,
+            api_key=resolved_key,
+            base_url=resolved_url,
+            http_client=http_client,
+            max_retries=max_retries,
         )
 
     # ------------------------------------------------------------------

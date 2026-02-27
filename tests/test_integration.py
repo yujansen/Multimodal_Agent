@@ -251,8 +251,10 @@ class TestMultimodalInput:
         agent.llm.ask_json = MagicMock(side_effect=mock_ask_json)
         agent.llm.chat = MagicMock(return_value="I see a cat sitting on a table.")
         agent.llm.build_vision_message = MagicMock(return_value={"role": "user", "content": []})
+        # Mock the vision processor so modality preprocessing doesn't read the file
+        agent.vision_proc.run = MagicMock(return_value="A cat sitting on a table in a room.")
 
         response = agent.chat("What's in this image?", image_paths=["cat.jpg"])
         assert "cat" in response
-        # Vision path was used (build_vision_message called)
-        agent.llm.build_vision_message.assert_called_once()
+        # Vision processor was invoked during modality preprocessing
+        agent.vision_proc.run.assert_called_once()

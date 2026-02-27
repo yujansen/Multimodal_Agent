@@ -29,3 +29,15 @@ class PinocchioConfig:
     # Behaviour settings
     meta_reflect_interval: int = 5
     verbose: bool = True
+
+    # Resource / parallelism settings
+    max_workers: int | None = field(
+        default_factory=lambda: (
+            int(os.getenv("PINOCCHIO_MAX_WORKERS"))
+            if os.getenv("PINOCCHIO_MAX_WORKERS")
+            else None  # None = auto-detect from hardware
+        )
+    )
+    parallel_modalities: bool = field(
+        default_factory=lambda: os.getenv("PINOCCHIO_PARALLEL", "true").lower() in ("1", "true", "yes")
+    )
