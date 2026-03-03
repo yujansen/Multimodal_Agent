@@ -6,6 +6,7 @@ with the originating agent role for easy tracing.
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from typing import Any
@@ -56,7 +57,6 @@ class PinocchioLogger:
         prefix = f"{colour}[{role.value.upper()}]{_RESET}"
         line = f"{prefix} {message}"
         if data:
-            import json
             line += f"\n  {json.dumps(data, ensure_ascii=False, indent=2)}"
         self._logger.info(line)
 

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pinocchio.models.enums import TaskType
+from pinocchio.models.enums import MemoryTier, TaskType
 from pinocchio.models.schemas import ProceduralEntry
 
 
@@ -63,9 +63,15 @@ class ProceduralMemory:
 
     def _load(self) -> None:
         if self._path.exists():
-            with open(self._path, "r", encoding="utf-8") as f:
-                raw: list[dict[str, Any]] = json.load(f)
-            self._entries = [ProceduralEntry.from_dict(d) for d in raw]
+            try:
+                with open(self._path, "r", encoding="utf-8") as f:
+                    raw: list[dict[str, Any]] = json.load(f)
+                self._entries = [ProceduralEntry.from_dict(d) for d in raw]
+            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                import shutil
+                backup = self._path.with_suffix(".json.bak")
+                shutil.copy2(self._path, backup)
+                self._entries = []
         self._rebuild_indices()
 
     def save(self) -> None:
@@ -140,3 +146,37 @@ class ProceduralMemory:
         qualified = [e for e in self._entries if e.usage_count >= 2]
         qualified.sort(key=lambda e: e.success_rate, reverse=True)
         return qualified[:limit]
+
+    # ------------------------------------------------------------------
+    # Tier-aware queries (temporal axis)
+    # ------------------------------------------------------------------
+
+    def get_by_tier(self, tier: MemoryTier) -> list[ProceduralEntry]:
+        """Return all procedures at a given temporal tier."""
+        return [e for e in self._entries if e.memory_tier == tier]
+
+    def get_persistent(self) -> list[ProceduralEntry]:
+        """Return proven procedures that are permanently stored."""
+        return self.get_by_tier(MemoryTier.PERSISTENT)
+
+    def promote_to_persistent(self, entry_id: str) -> bool:
+        """Promote a procedure to persistent tier (never pruned)."""
+        entry = self.get(entry_id)
+        if entry is None:
+            return False
+        entry.memory_tier = MemoryTier.PERSISTENT
+        self.save()
+        return True
+
+    def consolidate_proven(self, min_uses: int = 5, min_rate: float = 0.8) -> list[ProceduralEntry]:
+        """Identify long-term procedures that should be promoted to persistent.
+
+        Procedures with high usage count and success rate are candidates
+        for permanent retention.
+        """
+        return [
+            e for e in self._entries
+            if e.memory_tier == MemoryTier.LONG_TERM
+            and e.usage_count >= min_uses
+            and e.success_rate >= min_rate
+        ]

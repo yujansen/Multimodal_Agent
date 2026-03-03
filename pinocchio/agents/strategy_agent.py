@@ -110,7 +110,11 @@ class StrategyAgent(BaseAgent):
 
         llm_result = self.llm.ask_json(system=_SYSTEM_PROMPT, user=user_prompt)
 
-        fusion = FusionStrategy(llm_result.get("fusion_strategy", "late_fusion"))
+        try:
+            fusion = FusionStrategy(llm_result.get("fusion_strategy", "late_fusion"))
+        except ValueError:
+            self._warn(f"Invalid fusion_strategy from LLM: {llm_result.get('fusion_strategy')}; defaulting to LATE_FUSION")
+            fusion = FusionStrategy.LATE_FUSION
 
         result = StrategyResult(
             selected_strategy=llm_result.get("selected_strategy", "default"),

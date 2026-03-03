@@ -54,8 +54,8 @@ class LLMClient:
         api_key: str | None = None,
         base_url: str | None = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096,
-        timeout: float = 120.0,
+        max_tokens: int = 16384,
+        timeout: float = 600.0,
         max_retries: int = 2,
     ) -> None:
         self.model = model
@@ -67,7 +67,7 @@ class LLMClient:
 
         # Pooled HTTP client — reuses TCP connections across threads
         http_client = httpx.Client(
-            timeout=httpx.Timeout(timeout, connect=10.0),
+            timeout=httpx.Timeout(timeout, connect=30.0),
             limits=httpx.Limits(
                 max_connections=20,
                 max_keepalive_connections=10,
@@ -111,9 +111,24 @@ class LLMClient:
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
-        response = self._client.chat.completions.create(**kwargs)
-        content = response.choices[0].message.content or ""
-        return content.strip()
+        # Retry up to 2 times on empty responses
+        for attempt in range(3):
+            response = self._client.chat.completions.create(**kwargs)
+            choice = response.choices[0]
+            content = choice.message.content or ""
+            self._last_finish_reason = getattr(choice, "finish_reason", None) or "stop"
+            text = content.strip()
+            if text or attempt >= 2:
+                return text
+            # Empty response — retry with slightly higher temperature
+            kwargs["temperature"] = min(1.0, kwargs["temperature"] + 0.2)
+
+        return ""  # unreachable but satisfies type checker
+
+    @property
+    def last_finish_reason(self) -> str:
+        """Return the finish_reason from the most recent completion."""
+        return getattr(self, "_last_finish_reason", "stop")
 
     # ------------------------------------------------------------------
     # Convenience helpers
@@ -134,11 +149,15 @@ class LLMClient:
             return json.loads(raw)
         except json.JSONDecodeError:
             # Try to extract JSON from markdown fences
+            extracted = raw
             if "```json" in raw:
-                raw = raw.split("```json")[1].split("```")[0]
+                extracted = raw.split("```json")[1].split("```")[0]
             elif "```" in raw:
-                raw = raw.split("```")[1].split("```")[0]
-            return json.loads(raw)
+                extracted = raw.split("```")[1].split("```")[0]
+            try:
+                return json.loads(extracted)
+            except json.JSONDecodeError:
+                return {}
 
     # ------------------------------------------------------------------
     # Multimodal message builders (Qwen2.5-Omni compatible)
@@ -230,8 +249,8 @@ class AsyncLLMClient:
         api_key: str | None = None,
         base_url: str | None = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096,
-        timeout: float = 120.0,
+        max_tokens: int = 16384,
+        timeout: float = 600.0,
         max_retries: int = 2,
     ) -> None:
         self.model = model
@@ -242,7 +261,7 @@ class AsyncLLMClient:
         resolved_url = base_url or _DEFAULT_BASE_URL
 
         http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout, connect=10.0),
+            timeout=httpx.Timeout(timeout, connect=30.0),
             limits=httpx.Limits(
                 max_connections=20,
                 max_keepalive_connections=10,
@@ -296,11 +315,15 @@ class AsyncLLMClient:
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
+            extracted = raw
             if "```json" in raw:
-                raw = raw.split("```json")[1].split("```")[0]
+                extracted = raw.split("```json")[1].split("```")[0]
             elif "```" in raw:
-                raw = raw.split("```")[1].split("```")[0]
-            return json.loads(raw)
+                extracted = raw.split("```")[1].split("```")[0]
+            try:
+                return json.loads(extracted)
+            except json.JSONDecodeError:
+                return {}
 
     async def close(self) -> None:
         """Close the underlying async HTTP client."""

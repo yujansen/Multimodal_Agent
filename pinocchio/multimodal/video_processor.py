@@ -36,6 +36,7 @@ Skills / Capabilities
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -191,6 +192,7 @@ class VideoProcessor(BaseAgent):
         """
         self._log("Using fallback path (ffmpeg + sub-processors)")
         all_descriptions: list[str] = []
+        temp_paths: list[Path] = []  # track temp files/dirs for cleanup
 
         for vp in video_paths:
             # --- Launch frame extraction and audio extraction concurrently ---
@@ -199,6 +201,12 @@ class VideoProcessor(BaseAgent):
                 audio_future = pool.submit(self.extract_audio, vp)
                 frames = frame_future.result()
                 audio_path = audio_future.result()
+
+            # Track temp paths for cleanup
+            if frames:
+                temp_paths.append(Path(frames[0]).parent)
+            if audio_path:
+                temp_paths.append(Path(audio_path))
 
             # --- Analyse frames in parallel ---
             frame_descs: list[str] = []
@@ -249,4 +257,15 @@ class VideoProcessor(BaseAgent):
 
         final = "\n\n---\n\n".join(all_descriptions)
         self._log(f"Video analysis complete -- {len(final)} chars")
+
+        # Cleanup temporary files
+        for p in temp_paths:
+            try:
+                if p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+                elif p.is_file():
+                    p.unlink(missing_ok=True)
+            except Exception:
+                pass
+
         return final

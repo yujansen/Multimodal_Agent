@@ -91,10 +91,27 @@ class PerceptionAgent(BaseAgent):
             user=f"User input:\n{user_text}",
         )
 
-        task_type = TaskType(llm_result.get("task_type", "unknown"))
-        complexity = Complexity(int(llm_result.get("complexity", 3)))
-        confidence = ConfidenceLevel(llm_result.get("confidence", "medium"))
+        try:
+            task_type = TaskType(llm_result.get("task_type", "unknown"))
+        except ValueError:
+            self._warn(f"Invalid task_type from LLM: {llm_result.get('task_type')}; defaulting to UNKNOWN")
+            task_type = TaskType.UNKNOWN
+
+        try:
+            complexity = Complexity(int(llm_result.get("complexity", 3)))
+        except (ValueError, TypeError):
+            self._warn(f"Invalid complexity from LLM: {llm_result.get('complexity')}; defaulting to MODERATE")
+            complexity = Complexity.MODERATE
+
+        try:
+            confidence = ConfidenceLevel(llm_result.get("confidence", "medium"))
+        except ValueError:
+            self._warn(f"Invalid confidence from LLM: {llm_result.get('confidence')}; defaulting to MEDIUM")
+            confidence = ConfidenceLevel.MEDIUM
+
         ambiguities: list[str] = llm_result.get("ambiguities", [])
+        if not isinstance(ambiguities, list):
+            ambiguities = []
         raw_analysis: str = llm_result.get("analysis", "")
 
         # --- Memory lookup ---

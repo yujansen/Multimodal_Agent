@@ -40,7 +40,7 @@ class PinocchioConfig:
         "OPENAI_BASE_URL", "http://localhost:11434/v1",
     ))
     temperature: float = 0.7
-    max_tokens: int = 4096
+    max_tokens: int = 16384
 
     # Memory settings
     data_dir: str = field(default_factory=lambda: os.getenv("PINOCCHIO_DATA_DIR", "data"))

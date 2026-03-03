@@ -149,6 +149,27 @@ class AgentRole(str, Enum):
     VIDEO_PROCESSOR = "video_processor"      # Multimodal: video
 
 
+# ---------------------------------------------------------------------------
+# Memory Tier (Temporal Axis)
+# ---------------------------------------------------------------------------
+
+
+class MemoryTier(str, Enum):
+    """Temporal classification of memory entries.
+
+    Pinocchio uses a dual-axis memory system:
+      * **Content axis** — episodic / semantic / procedural (what is stored)
+      * **Temporal axis** — working / long_term / persistent (how long it lives)
+
+    Every memory record carries a tier so the system can manage decay,
+    consolidation (working → long_term), and promotion (long_term → persistent).
+    """
+
+    WORKING = "working"          # Current session only; cleared on reset
+    LONG_TERM = "long_term"      # Cross-session; subject to decay/pruning
+    PERSISTENT = "persistent"    # Permanent; core knowledge, never pruned
+
+
 class ExpertiseLevel(str, Enum):
     """Estimated expertise of the user for adaptive communication.
 

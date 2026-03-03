@@ -254,7 +254,20 @@ class TestMultimodalInput:
         # Mock the vision processor so modality preprocessing doesn't read the file
         agent.vision_proc.run = MagicMock(return_value="A cat sitting on a table in a room.")
 
-        response = agent.chat("What's in this image?", image_paths=["cat.jpg"])
+        # Create a real tiny PNG so ExecutionAgent._encode_image can read it
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+                b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+                b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
+                b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+            )
+            tmp_img = f.name
+        try:
+            response = agent.chat("What's in this image?", image_paths=[tmp_img])
+        finally:
+            os.unlink(tmp_img)
         assert "cat" in response
         # Vision processor was invoked during modality preprocessing
         agent.vision_proc.run.assert_called_once()

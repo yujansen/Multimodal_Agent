@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pinocchio.models.enums import MemoryTier
 from pinocchio.models.schemas import SemanticEntry
 
 
@@ -62,9 +63,15 @@ class SemanticMemory:
 
     def _load(self) -> None:
         if self._path.exists():
-            with open(self._path, "r", encoding="utf-8") as f:
-                raw: list[dict[str, Any]] = json.load(f)
-            self._entries = [SemanticEntry.from_dict(d) for d in raw]
+            try:
+                with open(self._path, "r", encoding="utf-8") as f:
+                    raw: list[dict[str, Any]] = json.load(f)
+                self._entries = [SemanticEntry.from_dict(d) for d in raw]
+            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                import shutil
+                backup = self._path.with_suffix(".json.bak")
+                shutil.copy2(self._path, backup)
+                self._entries = []
         self._rebuild_indices()
 
     def save(self) -> None:
@@ -147,3 +154,38 @@ class SemanticMemory:
     def needs_synthesis(self, domain: str, episode_count: int) -> bool:
         """Check if domain has accumulated enough episodes for knowledge synthesis."""
         return episode_count >= self.SYNTHESIS_THRESHOLD
+
+    # ------------------------------------------------------------------
+    # Tier-aware queries (temporal axis)
+    # ------------------------------------------------------------------
+
+    def get_by_tier(self, tier: MemoryTier) -> list[SemanticEntry]:
+        """Return all entries at a given temporal tier."""
+        return [e for e in self._entries if e.memory_tier == tier]
+
+    def get_persistent(self) -> list[SemanticEntry]:
+        """Return core knowledge entries that are permanently stored."""
+        return self.get_by_tier(MemoryTier.PERSISTENT)
+
+    def promote_to_persistent(self, entry_id: str) -> bool:
+        """Promote a knowledge entry to persistent tier."""
+        entry = self.get(entry_id)
+        if entry is None:
+            return False
+        entry.memory_tier = MemoryTier.PERSISTENT
+        entry.updated_at = datetime.now(timezone.utc).isoformat()
+        self.save()
+        return True
+
+    def consolidate_high_confidence(self, threshold: float = 0.85) -> list[SemanticEntry]:
+        """Identify long-term entries that should be promoted to persistent.
+
+        High-confidence entries backed by multiple source episodes are
+        candidates for permanent retention.
+        """
+        return [
+            e for e in self._entries
+            if e.memory_tier == MemoryTier.LONG_TERM
+            and e.confidence >= threshold
+            and len(e.source_episodes) >= 2
+        ]

@@ -29,6 +29,15 @@ Pinocchio 的自我学习建立在三层认知循环之上：
 └─────────────────────────────────────────────────┘
 ```
 
+### 2.2 响应完整性保障
+
+Pinocchio 通过四层机制确保输出永远不会被截断：
+
+1. **执行阶段自动续写** — 当 `finish_reason="length"` 时，自动循环续写最多 5 轮
+2. **句子完整性启发式** — 自然停止后检测文本是否以终结标点结尾
+3. **评估阶段双重检测** — 启发式规则 + LLM 评估联合判断完整性
+4. **编排器重试循环** — 评估不通过则触发最多 3 次外层重新执行
+
 ---
 
 ## 3. 完整系统提示词
@@ -53,17 +62,20 @@ increasingly sophisticated meta-cognitive techniques.
 
 ---
 
-## MEMORY SYSTEM
+## DUAL-AXIS MEMORY SYSTEM
 
-You maintain three memory stores that persist across interactions:
+You maintain a dual-axis memory system with two orthogonal classification dimensions:
 
-### Episodic Memory (经验记忆)
+### Content Axis — what is stored
+
+#### Episodic Memory (经验记忆)
 A structured log of past interactions, indexed by:
 - Task type and domain
 - Modalities involved
 - Strategy used
 - Outcome quality (self-rated 1-10)
 - Key lessons learned
+- Memory tier (working / long-term / persistent)
 
 Format:
 ```json
@@ -77,23 +89,37 @@ Format:
   "outcome_score": <1-10>,
   "lessons": ["<lesson 1>", "<lesson 2>"],
   "error_patterns": ["<error if any>"],
-  "improvement_notes": "<what to do differently next time>"
+  "improvement_notes": "<what to do differently next time>",
+  "memory_tier": "long_term"
 }
 ```
 
-### Semantic Memory (知识记忆)
+#### Semantic Memory (知识记忆)
 Distilled, generalizable knowledge extracted from episodic experiences:
 - Domain-specific heuristics
 - Cross-modal reasoning patterns
 - User preference models
 - Effective strategy templates
 
-### Procedural Memory (程序记忆)
+#### Procedural Memory (程序记忆)
 Refined action sequences and decision trees for recurring task types:
 - Multi-step reasoning chains
 - Tool-use protocols
 - Error recovery procedures
 - Modality-specific processing pipelines
+
+### Temporal Axis — how long it lives
+
+| Tier | Lifetime | Description |
+|------|----------|-------------|
+| **Working (工作记忆)** | Current session | Volatile context buffer; FIFO eviction at capacity 50 |
+| **Long-term (长期记忆)** | Cross-session | JSON-persisted; subject to decay and pruning |
+| **Persistent (持久记忆)** | Permanent | High-value knowledge auto-promoted from long-term |
+
+### Knowledge Synthesis & Consolidation
+- When a domain accumulates 10+ episodes → trigger distillation into semantic knowledge
+- Every 10 interactions → run consolidation pass (promote high-value long-term → persistent)
+- High-score episodes (≥8/10), high-confidence knowledge (≥0.8), and high-success procedures (≥70%) are auto-promoted
 
 ---
 
@@ -326,8 +352,9 @@ Then begin the PERCEIVE phase for the user's first message.
 | 设计要素 | 原理 | 预期效果 |
 |---------|------|---------|
 | 三层认知循环 | 模拟人类从操作→策略→元认知的认知层次 | 不仅改进"做什么"，还改进"怎么思考" |
-| 五阶段学习环 | 基于 Kolb 经验学习理论 + OODA 循环 | 结构化的持续改进，避免遗漏学习步骤 |
-| 三类记忆系统 | 借鉴认知科学的记忆分类理论 | 知识从具体→抽象→可操作的逐步提炼 |
+| 六阶段学习环 | 基于 Kolb 经验学习理论 + OODA 循环 | 结构化的持续改进，避免遗漏学习步骤 |
+| 双轴记忆系统 | 内容轴（情景/语义/程序）× 时间轴（工作/长期/持久） | 知识从具体→抽象→可操作的逐步提炼，且有时间维度的生命周期管理 |
+| 响应完整性保障 | 四层检测（自动续写 + 启发式 + LLM评估 + 编排器重试） | 确保用户永远不会收到截断的不完整回复 |
 | 错误分类体系 | 精确归因才能有效改进 | 避免"把所有错误当一类"的粗糙处理 |
 | 元反思机制 | 防止局部优化和认知盲区 | 定期"跳出来看"，发现系统性问题 |
 | 跨模态协议 | 多模态不是简单拼接，需要显式推理 | 提升模态间的一致性和协同效果 |
@@ -341,11 +368,12 @@ Then begin the PERCEIVE phase for the user's first message.
 配合结构化 JSON 文件存储，实现三层记忆的持久化。
 
 ### 当前技术栈
-- **LLM**: Qwen2.5-Omni（通过本地 Ollama 服务，OpenAI 兼容 API）
-- **记忆存储**: JSON 文件 + 倒排索引（无需外部数据库）
-- **编排框架**: 自研 Orchestrator（`pinocchio/orchestrator.py`）
+- **LLM**: Qwen2.5-Omni（通过本地 Ollama 服务，OpenAI 兼容 API，max_tokens=16384）
+- **记忆存储**: 双轴记忆 — JSON 文件 + 倒排索引（无需外部数据库）
+- **编排框架**: 自研 Orchestrator（`pinocchio/orchestrator.py`）+ 最多 3 次完整性重试
 - **多模态处理**: Qwen2.5-Omni 原生多模态输入（文本 / 图像 / 音频 / 视频）
 - **并行处理**: `ThreadPoolExecutor` + `ResourceMonitor` 硬件感知调度
+- **响应保障**: 自动续写（最多 5 轮）+ 启发式完整性检查 + LLM 评估
 
 ### 兼容的替代方案
 - **LLM**: 任何 OpenAI 兼容 API（GPT-4o、Claude、Gemini、vLLM 等）

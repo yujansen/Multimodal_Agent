@@ -40,8 +40,11 @@ from __future__ import annotations
 from typing import Any
 
 from pinocchio.agents.base_agent import BaseAgent
+from pinocchio.memory.memory_manager import MemoryManager
 from pinocchio.models.enums import AgentRole
 from pinocchio.models.schemas import MetaReflectionResult
+from pinocchio.utils.llm_client import LLMClient
+from pinocchio.utils.logger import PinocchioLogger
 
 _SYSTEM_PROMPT = """\
 You are the Meta-Reflection sub-agent of Pinocchio, a self-evolving multimodal AI.
@@ -75,9 +78,9 @@ class MetaReflectionAgent(BaseAgent):
 
     def __init__(
         self,
-        llm: Any,
-        memory: Any,
-        logger: Any,
+        llm: LLMClient,
+        memory: MemoryManager,
+        logger: PinocchioLogger,
         *,
         meta_reflect_interval: int | None = None,
     ) -> None:

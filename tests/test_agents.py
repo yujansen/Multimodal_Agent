@@ -196,12 +196,20 @@ class TestExecutionAgent:
         assert result.content == "The answer is 42."
         assert result.confidence == 0.9  # not novel → higher confidence
 
-    def test_run_with_images_uses_vision(self, mock_llm, memory, logger):
+    def test_run_with_images_uses_vision(self, mock_llm, memory, logger, tmp_path):
         mock_llm.chat.return_value = "I see a cat in the image."
         mock_llm.build_vision_message.return_value = {"role": "user", "content": []}
         agent = ExecutionAgent(mock_llm, memory, logger)
+        # Create a real tiny PNG so _encode_image can read it
+        img_path = tmp_path / "cat.png"
+        img_path.write_bytes(
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+            b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+            b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
+            b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
         result = agent.run(
-            user_input=MultimodalInput(text="What's in this?", image_paths=["cat.jpg"]),
+            user_input=MultimodalInput(text="What's in this?", image_paths=[str(img_path)]),
             perception=PerceptionResult(modalities=[Modality.TEXT, Modality.IMAGE]),
             strategy=StrategyResult(selected_strategy="vision_qa", is_novel=True),
         )
@@ -240,6 +248,8 @@ class TestEvaluationAgent:
             "went_wrong": [],
             "surprises": ["user asked a follow-up"],
             "cross_modal_coherence": 5,
+            "is_complete": True,
+            "incompleteness_details": "",
             "analysis": "Good quality output.",
         }
         agent = EvaluationAgent(mock_llm, memory, logger)
@@ -247,7 +257,7 @@ class TestEvaluationAgent:
             user_input=MultimodalInput(text="test"),
             perception=PerceptionResult(task_type=TaskType.QUESTION_ANSWERING),
             strategy=StrategyResult(selected_strategy="direct"),
-            response=AgentMessage(content="The answer..."),
+            response=AgentMessage(content="The answer to your question is that Python uses dynamic typing, which offers great flexibility."),
         )
 
         assert result.task_completion == "complete"
@@ -255,6 +265,7 @@ class TestEvaluationAgent:
         assert result.strategy_effectiveness == 7
         assert len(result.went_well) == 2
         assert result.user_satisfaction == "awaiting"
+        assert result.is_complete is True
 
     def test_run_detects_failures(self, mock_llm, memory, logger):
         mock_llm.ask_json.return_value = {

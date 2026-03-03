@@ -80,8 +80,6 @@ class ResourceSnapshot:
         """
         if self.has_gpu:
             vram = self.total_vram_mb
-            if vram >= 16_000:
-                return min(4, self.cpu_count_physical)
             if vram >= 8_000:
                 return min(4, self.cpu_count_physical)
             return 2

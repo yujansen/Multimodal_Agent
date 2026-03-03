@@ -63,7 +63,7 @@ class TestLLMExceptionHandling:
 
     @patch("pinocchio.utils.llm_client.openai")
     def test_ask_json_invalid_json_raises(self, mock_openai_mod):
-        """ask_json should raise when LLM returns non-JSON garbage."""
+        """ask_json should return empty dict when LLM returns non-JSON garbage."""
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
@@ -72,8 +72,8 @@ class TestLLMExceptionHandling:
         mock_openai_mod.OpenAI.return_value = mock_client
 
         llm = LLMClient(model="test", api_key="test", base_url="http://localhost:11434/v1")
-        with pytest.raises(json.JSONDecodeError):
-            llm.ask_json("system", "user")
+        result = llm.ask_json("system", "user")
+        assert result == {}
 
 
 # ── LLM Empty Response Tests ────────────────────────────────────────────

@@ -391,7 +391,15 @@ class TestExecutionAgentComprehensive:
         llm.build_vision_message.return_value = {"role": "user", "content": []}
         llm.chat.return_value = "I see objects in the image."
         agent = ExecutionAgent(llm, memory, logger)
-        inp = MultimodalInput(text="Describe", image_paths=["test.jpg"])
+        # Create a real tiny PNG so _encode_image can read it
+        img_file = tmp_path / "test.png"
+        img_file.write_bytes(
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+            b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+            b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
+            b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        inp = MultimodalInput(text="Describe", image_paths=[str(img_file)])
         result = agent.run(
             user_input=inp,
             perception=_perception(modalities=[Modality.TEXT, Modality.IMAGE]),
@@ -485,13 +493,14 @@ class TestEvaluationAgentComprehensive:
     def test_default_values_on_missing_json_keys(self, tmp_path):
         agent = self._make_agent(tmp_path, {
             "output_quality": 6,
+            "is_complete": True,
             # everything else missing
         })
         result = agent.run(
             user_input=MultimodalInput(text="test"),
             perception=_perception(),
             strategy=_strategy(),
-            response=AgentMessage(content="Answer"),
+            response=AgentMessage(content="This is a complete answer to the question asked by the user."),
         )
         assert result.output_quality == 6
         assert isinstance(result.went_well, list)

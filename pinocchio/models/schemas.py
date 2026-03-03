@@ -27,6 +27,7 @@ from pinocchio.models.enums import (
     FusionStrategy,
     ExpertiseLevel,
     CommunicationStyle,
+    MemoryTier,
 )
 
 
@@ -51,6 +52,7 @@ class EpisodicRecord:
     lessons: list[str] = field(default_factory=list)
     error_patterns: list[str] = field(default_factory=list)
     improvement_notes: str = ""
+    memory_tier: MemoryTier = MemoryTier.LONG_TERM  # temporal axis
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -64,22 +66,19 @@ class EpisodicRecord:
             "lessons": self.lessons,
             "error_patterns": self.error_patterns,
             "improvement_notes": self.improvement_notes,
+            "memory_tier": self.memory_tier.value,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EpisodicRecord":
-        return cls(
-            episode_id=data.get("episode_id", str(uuid.uuid4())[:8]),
-            timestamp=data.get("timestamp", ""),
-            task_type=TaskType(data.get("task_type", "unknown")),
-            modalities=[Modality(m) for m in data.get("modalities", [])],
-            user_intent=data.get("user_intent", ""),
-            strategy_used=data.get("strategy_used", ""),
-            outcome_score=data.get("outcome_score", 5),
-            lessons=data.get("lessons", []),
-            error_patterns=data.get("error_patterns", []),
-            improvement_notes=data.get("improvement_notes", ""),
-        )
+        raw = dict(data)
+        if "task_type" in raw:
+            raw["task_type"] = TaskType(raw["task_type"])
+        if "modalities" in raw:
+            raw["modalities"] = [Modality(m) for m in raw["modalities"]]
+        if "memory_tier" in raw:
+            raw["memory_tier"] = MemoryTier(raw["memory_tier"])
+        return cls(**{k: v for k, v in raw.items() if k in cls.__dataclass_fields__})
 
 
 @dataclass
@@ -95,6 +94,7 @@ class SemanticEntry:
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     updated_at: str = ""
+    memory_tier: MemoryTier = MemoryTier.LONG_TERM  # temporal axis
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -105,11 +105,15 @@ class SemanticEntry:
             "confidence": self.confidence,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "memory_tier": self.memory_tier.value,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SemanticEntry":
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        raw = dict(data)
+        if "memory_tier" in raw:
+            raw["memory_tier"] = MemoryTier(raw["memory_tier"])
+        return cls(**{k: v for k, v in raw.items() if k in cls.__dataclass_fields__})
 
 
 @dataclass
@@ -124,6 +128,7 @@ class ProceduralEntry:
     success_rate: float = 0.0  # 0-1
     usage_count: int = 0
     last_used: str = ""
+    memory_tier: MemoryTier = MemoryTier.LONG_TERM  # temporal axis
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -135,6 +140,7 @@ class ProceduralEntry:
             "success_rate": self.success_rate,
             "usage_count": self.usage_count,
             "last_used": self.last_used,
+            "memory_tier": self.memory_tier.value,
         }
 
     @classmethod
@@ -142,6 +148,8 @@ class ProceduralEntry:
         raw = dict(data)
         if "task_type" in raw:
             raw["task_type"] = TaskType(raw["task_type"])
+        if "memory_tier" in raw:
+            raw["memory_tier"] = MemoryTier(raw["memory_tier"])
         return cls(**{k: v for k, v in raw.items() if k in cls.__dataclass_fields__})
 
 
@@ -207,6 +215,8 @@ class EvaluationResult:
     went_wrong: list[str] = field(default_factory=list)
     surprises: list[str] = field(default_factory=list)
     cross_modal_coherence: int = 5    # 1-10
+    is_complete: bool = True           # was the response fully formed?
+    incompleteness_details: str = ""   # why the response is incomplete
     user_satisfaction: str = "awaiting"
     raw_analysis: str = ""
 

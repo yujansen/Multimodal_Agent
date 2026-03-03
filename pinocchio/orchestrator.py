@@ -44,6 +44,7 @@ Skills / Capabilities (as the Orchestrator)
 from __future__ import annotations
 
 import asyncio
+import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -130,6 +131,7 @@ class Pinocchio:
         self.conversation_history: list[dict[str, str]] = []
         self._interaction_count = 0
         self._verbose = verbose
+        self._lock = threading.Lock()  # protects session state mutations
 
         # Log detected hardware
         if verbose:
@@ -171,12 +173,14 @@ class Pinocchio:
         -------
         str : The agent's response text.
         """
-        self._interaction_count += 1
-        self.user_model.interaction_count = self._interaction_count
+        with self._lock:
+            self._interaction_count += 1
+            interaction_num = self._interaction_count
+            self.user_model.interaction_count = interaction_num
         self.logger.separator()
         self.logger.log(
             AgentRole.ORCHESTRATOR,
-            f"Interaction #{self._interaction_count}",
+            f"Interaction #{interaction_num}",
         )
 
         user_input = MultimodalInput(
@@ -197,11 +201,12 @@ class Pinocchio:
             )
 
         # Store in conversation history
-        if text:
-            self.conversation_history.append({"role": "user", "content": text})
-        self.conversation_history.append(
-            {"role": "assistant", "content": response.content}
-        )
+        with self._lock:
+            if text:
+                self.conversation_history.append({"role": "user", "content": text})
+            self.conversation_history.append(
+                {"role": "assistant", "content": response.content}
+            )
 
         return response.content
 
@@ -240,6 +245,7 @@ class Pinocchio:
         self.conversation_history.clear()
         self._interaction_count = 0
         self.user_model = UserModel()
+        self.memory.reset_working_memory()
 
     def status(self) -> dict[str, Any]:
         """Return a summary of the agent's current state."""
@@ -254,28 +260,50 @@ class Pinocchio:
                 "interests": self.user_model.domains_of_interest,
             },
             "resources": self._resources.to_dict(),
+            "working_memory": self.memory.working.summary(),
         }
 
     # ------------------------------------------------------------------
     # Internal: Cognitive Loop
     # ------------------------------------------------------------------
 
-    def _run_cognitive_loop(self, user_input: MultimodalInput) -> AgentMessage:
-        """Execute the full PERCEIVE → STRATEGIZE → EXECUTE → EVALUATE → LEARN pipeline."""
+    MAX_COMPLETION_RETRIES = 3  # max continuation attempts for incomplete responses
 
-        # Phase 0: PREPROCESS MODALITIES (parallel)
+    def _run_cognitive_loop(self, user_input: MultimodalInput) -> AgentMessage:
+        """Execute the full PERCEIVE → STRATEGIZE → EXECUTE → EVALUATE → LEARN pipeline.
+
+        This is the heart of Pinocchio's self-evolving intelligence.  Every
+        user interaction passes through all 6 phases, each handled by a
+        dedicated sub-agent.  Phase 4.5 (retry loop) ensures response
+        completeness, and Phase 6 meta-reflect fires periodically for
+        higher-order self-improvement.
+        """
+
+        # ── Phase 0: Buffer the raw user input into working memory ──
+        # Working memory gives downstream agents conversational context
+        if user_input.text:
+            self.memory.working.add_conversation_turn("user", user_input.text)
+
+        # ── Phase 0.5: PREPROCESS MODALITIES (parallel or sequential) ──
+        # Non-text modalities (images/audio/video) are converted to text
+        # descriptions before entering the cognitive loop so every agent
+        # can reason about them uniformly.
         modality_context = self._preprocess_modalities(user_input)
 
-        # Phase 1: PERCEIVE
+        # ── Phase 1: PERCEIVE ──
+        # Classify the task, detect modalities, assess complexity & confidence
         perception = self.perception.run(
             user_input=user_input,
             modality_context=modality_context,
         )
 
-        # Phase 2: STRATEGIZE
+        # ── Phase 2: STRATEGIZE ──
+        # Select (or construct) the best approach; retrieve procedural memory
         strategy = self.strategy.run(perception=perception)
 
-        # Phase 3: EXECUTE
+        # ── Phase 3: EXECUTE ──
+        # Generate the user-facing response; includes auto-continuation if
+        # the LLM hits its token limit (up to _MAX_AUTO_CONTINUATIONS rounds)
         response = self.execution.run(
             user_input=user_input,
             perception=perception,
@@ -283,7 +311,8 @@ class Pinocchio:
             modality_context=modality_context,
         )
 
-        # Phase 4: EVALUATE
+        # ── Phase 4: EVALUATE ──
+        # Score quality, check completeness, identify improvement areas
         evaluation = self.evaluation.run(
             user_input=user_input,
             perception=perception,
@@ -291,7 +320,52 @@ class Pinocchio:
             response=response,
         )
 
-        # Phase 5: LEARN
+        # ── Phase 4.5: COMPLETENESS RETRY LOOP ──
+        # If the evaluator says the response is incomplete, ask the
+        # execution agent to continue.  This is the *outer* retry loop;
+        # each continue_response() call also has its own *inner* auto-
+        # continuation loop for token-limit hits.
+        retry_count = 0
+        while not evaluation.is_complete and retry_count < self.MAX_COMPLETION_RETRIES:
+            retry_count += 1
+            self.logger.log(
+                AgentRole.ORCHESTRATOR,
+                f"Response incomplete (attempt {retry_count}/{self.MAX_COMPLETION_RETRIES}) "
+                f"— requesting continuation: {evaluation.incompleteness_details}",
+            )
+
+            try:
+                response = self.execution.continue_response(
+                    user_input=user_input,
+                    partial_response=response.content,
+                    incompleteness_details=evaluation.incompleteness_details,
+                )
+
+                # Re-evaluate the continued response
+                evaluation = self.evaluation.run(
+                    user_input=user_input,
+                    perception=perception,
+                    strategy=strategy,
+                    response=response,
+                )
+            except Exception as retry_exc:
+                self.logger.error(
+                    AgentRole.ORCHESTRATOR,
+                    f"Continuation attempt {retry_count} failed: {retry_exc}",
+                )
+                break  # Keep the best response we have so far
+
+        if retry_count > 0:
+            self.logger.log(
+                AgentRole.ORCHESTRATOR,
+                f"Completion retries used: {retry_count} — "
+                f"final status: {evaluation.task_completion}, "
+                f"complete: {evaluation.is_complete}",
+            )
+
+        # ── Phase 5: LEARN ──
+        # Extract lessons, store episode, update semantic & procedural memory,
+        # and flag domains for knowledge synthesis when threshold is reached
         user_text = user_input.text or "(non-text input)"
         learning = self.learning.run(
             user_input_text=user_text,
@@ -300,7 +374,9 @@ class Pinocchio:
             evaluation=evaluation,
         )
 
-        # Phase 6: META-REFLECT (periodic)
+        # ── Phase 6: META-REFLECT (periodic — every N interactions) ──
+        # Higher-order self-analysis: detect biases, track improvement trends,
+        # generate evolution plan.  Only fires at the configured interval.
         if self.meta_reflection.should_trigger():
             self.logger.log(
                 AgentRole.ORCHESTRATOR,
@@ -313,6 +389,22 @@ class Pinocchio:
                     AgentRole.ORCHESTRATOR,
                     f"Top improvement priorities: {meta.priority_improvements[:3]}",
                 )
+
+        # ── Periodic consolidation (temporal-axis promotion) ──
+        # Every 10 interactions, promote high-value long-term memories
+        # to persistent tier so they are never pruned.
+        if self._interaction_count % 10 == 0 and self._interaction_count > 0:
+            promoted = self.memory.consolidate()
+            if any(v > 0 for v in promoted.values()):
+                self.logger.log(
+                    AgentRole.ORCHESTRATOR,
+                    f"Memory consolidation: {promoted}",
+                )
+
+        # Store assistant response in working memory
+        self.memory.working.add_conversation_turn(
+            "assistant", response.content[:500]
+        )
 
         self.logger.separator()
         self.logger.log(
@@ -397,6 +489,14 @@ class Pinocchio:
             AgentRole.ORCHESTRATOR,
             f"Sequential modality preprocessing: {list(tasks.keys())}",
         )
-        return {
-            name: proc.run(**kwargs) for name, (proc, kwargs) in tasks.items()
-        }
+        results = {}
+        for name, (proc, kwargs) in tasks.items():
+            try:
+                results[name] = proc.run(**kwargs)
+            except Exception as exc:
+                self.logger.error(
+                    AgentRole.ORCHESTRATOR,
+                    f"Modality '{name}' failed: {exc}",
+                )
+                results[name] = f"(error processing {name})"
+        return results

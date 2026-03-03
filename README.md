@@ -2,6 +2,8 @@
 
 [![Author](https://img.shields.io/badge/Author-Jansen%20Yu-blue)](https://github.com/yujansen)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org)
+[![Tests](https://img.shields.io/badge/Tests-529%20passed-brightgreen)]()
 
 > *"每一次对话都让我变得更好。"*
 
@@ -15,8 +17,9 @@ Pinocchio 是一个具备**持续自我学习与自我改进能力**的多模态
 |------|------|
 | **6 阶段认知循环** | PERCEIVE → STRATEGIZE → EXECUTE → EVALUATE → LEARN → META-REFLECT |
 | **多模态原生** | 文本 / 图像 / 音频 / 视频，通过 Qwen2.5-Omni 统一处理 |
-| **三层记忆系统** | 情景记忆 + 语义记忆 + 程序记忆，JSON 文件持久化，倒排索引加速 |
+| **双轴记忆系统** | 内容轴（情景 / 语义 / 程序）× 时间轴（工作 / 长期 / 持久），共 9 种记忆组合 |
 | **自我进化** | 从每次交互中提取教训，优化策略，积累可复用的程序模板 |
+| **响应完整性保障** | 自动续写 + 启发式检查 + finish_reason 检测，确保输出不截断 |
 | **元反思** | 周期性高阶反思，检测认知偏差，生成改进计划 |
 | **硬件感知并行** | 自动检测 CPU / GPU / RAM，动态调整并行度 |
 | **异步支持** | `AsyncLLMClient` + `async_chat()` 适用于高吞吐场景 |
@@ -27,33 +30,33 @@ Pinocchio 是一个具备**持续自我学习与自我改进能力**的多模态
 
 ```
 Multimodal_Agent/
-├── config.py                  # 全局配置（PinocchioConfig 数据类）
-├── main.py                    # CLI 交互入口
+├── config.py                  # 全局配置（PinocchioConfig 数据类 + 环境变量）
+├── main.py                    # CLI 交互入口（支持 --image/--audio/--video）
 ├── pyproject.toml             # 包管理与工具配置
-├── requirements.txt           # 核心依赖
-├── pinocchio_system_prompt.md # 系统人设 prompt
+├── pinocchio_system_prompt.md # 完整系统人设 prompt 设计文档
 │
 ├── pinocchio/                 # 核心包
 │   ├── __init__.py
-│   ├── orchestrator.py        # 顶层编排器 — 驱动认知循环
+│   ├── orchestrator.py        # 顶层编排器 — 驱动认知循环 + 响应完整性重试
 │   │
 │   ├── agents/                # 6 个认知循环子智能体
 │   │   ├── base_agent.py          # 抽象基类（共享 LLM / 记忆 / 日志）
 │   │   ├── perception_agent.py    # Phase 1: 感知 — 输入分析与分类
 │   │   ├── strategy_agent.py      # Phase 2: 策略 — 方案选择与风险评估
-│   │   ├── execution_agent.py     # Phase 3: 执行 — 生成用户响应
-│   │   ├── evaluation_agent.py    # Phase 4: 评估 — 质量评分与问题识别
+│   │   ├── execution_agent.py     # Phase 3: 执行 — 生成用户响应 + 自动续写
+│   │   ├── evaluation_agent.py    # Phase 4: 评估 — 质量评分 + 完整性检测
 │   │   ├── learning_agent.py      # Phase 5: 学习 — 提取教训、更新记忆
 │   │   └── meta_reflection_agent.py # Phase 6: 元反思 — 高阶自我分析
 │   │
-│   ├── memory/                # 三层记忆系统
-│   │   ├── memory_manager.py      # 统一门面（facade）
-│   │   ├── episodic_memory.py     # 情景记忆 — 交互历史
-│   │   ├── semantic_memory.py     # 语义记忆 — 蒸馏知识
-│   │   └── procedural_memory.py   # 程序记忆 — 可复用策略
+│   ├── memory/                # 双轴记忆系统
+│   │   ├── memory_manager.py      # 统一门面（facade）— 双轴协调
+│   │   ├── working_memory.py      # 工作记忆 — 会话级上下文缓冲（时间轴）
+│   │   ├── episodic_memory.py     # 情景记忆 — 交互历史（内容轴）
+│   │   ├── semantic_memory.py     # 语义记忆 — 蒸馏知识（内容轴）
+│   │   └── procedural_memory.py   # 程序记忆 — 可复用策略（内容轴）
 │   │
 │   ├── models/                # 数据模型
-│   │   ├── enums.py               # 枚举（Modality, TaskType, AgentRole...）
+│   │   ├── enums.py               # 枚举（Modality, TaskType, MemoryTier...）
 │   │   └── schemas.py             # 数据类（记忆记录、认知结果、消息）
 │   │
 │   ├── multimodal/            # 模态处理器
@@ -63,27 +66,38 @@ Multimodal_Agent/
 │   │   └── video_processor.py     # 视频理解（原生 + ffmpeg 回退）
 │   │
 │   └── utils/                 # 基础工具
-│       ├── llm_client.py          # LLM API 封装（同步 + 异步）
+│       ├── llm_client.py          # LLM API 封装（同步 + 异步，空响应重试）
 │       ├── logger.py              # 彩色结构化日志
 │       ├── resource_monitor.py    # CPU / GPU / RAM 检测
 │       └── parallel_executor.py   # 资源感知并行执行器
 │
 ├── scripts/                   # 辅助脚本
-│   └── generate_demo_video.py     # 演示视频生成器
+│   └── generate_demo_video.py     # 演示视频生成器（19 场景）
 │
-└── tests/                     # 测试套件（390+ 测试，99% 覆盖率）
-    ├── conftest.py
-    ├── test_agents.py
-    ├── test_cognitive_loop.py
-    ├── test_integration.py
-    ├── test_memory.py
-    ├── test_memory_edge.py
-    ├── test_models.py
-    ├── test_multimodal.py
-    ├── test_orchestrator_deep.py
-    ├── test_resource_parallel.py
-    ├── test_stress_integration.py
-    └── test_utils.py
+├── tests/                     # 测试套件（529 测试）
+│   ├── conftest.py                # 共享 fixtures
+│   ├── test_agents.py             # 6 个子智能体单元测试
+│   ├── test_async.py              # 异步客户端测试
+│   ├── test_cognitive_loop.py     # 认知循环边界条件
+│   ├── test_dual_axis_memory.py   # 双轴记忆 + tier 提升
+│   ├── test_integration.py        # 全链路集成测试
+│   ├── test_llm_edge_cases.py     # LLM 超时/空响应边界
+│   ├── test_memory.py             # 记忆 CRUD + 持久化
+│   ├── test_memory_edge.py        # 记忆损坏/大数据边界
+│   ├── test_models.py             # 枚举 + 数据类序列化
+│   ├── test_multimodal.py         # 多模态处理器
+│   ├── test_orchestrator_deep.py  # 编排器深度测试
+│   ├── test_parametrized.py       # 参数化测试
+│   ├── test_resource_coverage.py  # 资源检测覆盖
+│   ├── test_resource_parallel.py  # 并行执行器
+│   ├── test_robustness.py         # 鲁棒性综合测试
+│   ├── test_stress_integration.py # 压力测试
+│   ├── test_utils.py              # LLMClient + Logger
+│   ├── test_video_coverage.py     # 视频处理覆盖
+│   └── test_working_memory.py     # 工作记忆单元测试
+│
+└── docs/
+    └── EVALUATION_REPORT.md       # 评估报告
 ```
 
 ---
@@ -111,8 +125,9 @@ pip install -e ".[dev]"
 # 安装 Ollama（macOS）
 brew install ollama
 
-# 拉取 Qwen2.5-Omni 模型
-ollama pull qwen2.5-omni
+# 拉取模型（任选其一）
+ollama pull qwen2.5-omni       # 原生多模态，推荐
+ollama pull qwen3-vl:8b        # 轻量视觉模型
 
 # 启动服务（默认监听 localhost:11434）
 ollama serve
@@ -139,12 +154,20 @@ python main.py
 [EXECUTION] Executing strategy: structured_explanation
 
 ── Phase 4: EVALUATE 评估 ──────────────────
-[EVALUATION] Quality: 8/10 | Strategy: 8/10 | Status: complete
+[EVALUATION] Quality: 8/10 | Strategy: 8/10 | Status: complete | Complete: True
 
 ── Phase 5: LEARN 学习 ──────────────────────
 [LEARNING] Stored episode abc12345 (score: 8/10)
 
 🤖 Pinocchio: 量子纠缠就像是两个粒子之间的一种"超距关联"...
+```
+
+多模态输入示例：
+
+```
+🧑 You: 这张图片里有什么？ --image photo.jpg
+🧑 You: 总结这段会议录音 --audio meeting.wav
+🧑 You: 对比这张图和这个视频 --image a.jpg --video clip.mp4
 ```
 
 ---
@@ -156,12 +179,14 @@ python main.py
 ```python
 from pinocchio import Pinocchio
 
-# 使用默认配置
+# === 基本用法 ===
 agent = Pinocchio()
 
 # 纯文本对话
 response = agent.chat("用 Python 写一个快速排序")
 print(response)
+
+# === 多模态输入 ===
 
 # 图片理解
 response = agent.chat(
@@ -188,9 +213,14 @@ response = agent.chat(
     video_paths=["clip.mp4"],
 )
 
+# === 会话管理 ===
+
 # 查看智能体状态
 import json
 print(json.dumps(agent.status(), ensure_ascii=False, indent=2))
+
+# 重置会话（持久化记忆保留）
+agent.reset()
 ```
 
 ### 异步调用
@@ -217,11 +247,11 @@ from pinocchio import Pinocchio
 cfg = PinocchioConfig()
 
 agent = Pinocchio(
-    model=cfg.model,
-    api_key=cfg.api_key,
-    base_url=cfg.base_url,
-    data_dir=cfg.data_dir,
-    verbose=cfg.verbose,
+    model=cfg.model,            # 默认: qwen2.5-omni
+    api_key=cfg.api_key,        # 默认: ollama
+    base_url=cfg.base_url,      # 默认: http://localhost:11434/v1
+    data_dir=cfg.data_dir,      # 记忆持久化路径
+    verbose=cfg.verbose,        # 是否输出详细日志
     max_workers=cfg.max_workers,
     parallel_modalities=cfg.parallel_modalities,
     meta_reflect_interval=cfg.meta_reflect_interval,
@@ -250,15 +280,33 @@ export PINOCCHIO_PARALLEL=true
                │ 感知分析 │   │ 策略选择 │   │ 生成响应 │
                └──────────┘   └──────────┘   └────┬─────┘
                                                    │
+                                              ┌────▼──────┐
+                                              │ 自动续写   │ ← finish_reason="length"
+                                              │ (最多5轮)  │     时自动循环续写
+                                              └────┬──────┘
+                                                   │
 用户输出  ◄──  ┌────────────┐  ┌──────────┐  ┌────▼─────┐
                │META-REFLECT│◄─│  LEARN   │◄─│ EVALUATE │
                │元反思(周期) │  │ 提取教训 │  │ 质量评估 │
                └────────────┘  └──────────┘  └──────────┘
 ```
 
-每个阶段由独立的子智能体执行，通过 Orchestrator 统一调度。所有阶段共享同一个 LLM 实例和三层记忆系统。
+每个阶段由独立的子智能体执行，通过 Orchestrator 统一调度。所有阶段共享同一个 LLM 实例和双轴记忆系统。
 
-### 三层记忆系统
+### 响应完整性保障
+
+Pinocchio 通过四层机制确保输出不会被截断：
+
+1. **执行阶段自动续写** — 当 `finish_reason="length"` 时，自动循环续写最多 5 轮
+2. **句子完整性检查** — 自然停止后检测文本是否以完整句子结尾
+3. **评估阶段双重检测** — 启发式规则 + LLM 评估联合判断完整性
+4. **编排器重试循环** — 评估不通过则触发最多 3 次外层重试
+
+### 双轴记忆系统
+
+记忆同时沿两个正交维度分类：
+
+**内容轴** — 存储什么：
 
 | 记忆类型 | 人类类比 | 存储内容 | 索引方式 | 持久化 |
 |----------|----------|----------|----------|--------|
@@ -266,7 +314,15 @@ export PINOCCHIO_PARALLEL=true
 | **语义记忆** | "我知道…" | 从多次经验蒸馏的通用知识 | domain 倒排索引 | JSON |
 | **程序记忆** | "我会…" | 可复用的策略模板（步骤、成功率） | task_type 倒排索引 | JSON |
 
-**知识合成机制**：当某个领域的情景记忆达到阈值（默认 10 条），系统会标记该领域进行知识蒸馏，由 LearningAgent 将具体经验提炼为通用语义知识。
+**时间轴** — 活多久：
+
+| 层级 | 生命周期 | 说明 |
+|------|----------|------|
+| **工作记忆** | 当前会话 | 对话上下文、活跃假设；容量限制 50 项，FIFO 淘汰 |
+| **长期记忆** | 跨会话 | JSON 持久化，可被衰减/修剪 |
+| **持久记忆** | 永久 | 高价值知识，自动晋升（高分情景 / 高置信知识 / 高成功程序） |
+
+**知识合成**：当某领域情景记忆达到 10 条，触发蒸馏为语义知识。每 10 次交互自动运行合并（consolidation），将长期记忆中高价值条目晋升为持久记忆。
 
 ### 多模态处理
 
@@ -303,7 +359,7 @@ pytest -m "not slow"
 pytest tests/test_agents.py -v
 ```
 
-当前状态：**390+ 测试，99% 代码覆盖率**
+当前状态：**529 测试，全部通过**
 
 ---
 
@@ -315,7 +371,8 @@ pytest tests/test_agents.py -v
 | `api_key` | `str` | `ollama` | `OLLAMA_API_KEY` | API 密钥 |
 | `base_url` | `str` | `http://localhost:11434/v1` | `OPENAI_BASE_URL` | API 基础 URL |
 | `temperature` | `float` | `0.7` | — | 生成温度 |
-| `max_tokens` | `int` | `4096` | — | 最大生成 tokens |
+| `max_tokens` | `int` | `16384` | — | 最大生成 tokens |
+| `timeout` | `float` | `600.0` | — | LLM 请求超时（秒） |
 | `data_dir` | `str` | `data` | `PINOCCHIO_DATA_DIR` | 记忆持久化目录 |
 | `meta_reflect_interval` | `int` | `5` | — | 元反思触发间隔 |
 | `max_workers` | `int\|None` | auto | `PINOCCHIO_MAX_WORKERS` | 最大并行线程数 |
@@ -351,6 +408,13 @@ ruff format pinocchio/
 3. 在 `LLMClient` 中添加 `build_xxx_message()` 构建方法
 4. 在 `orchestrator.py` 的 `_preprocess_modalities()` 中注册
 5. 在 `pinocchio/multimodal/__init__.py` 中导出
+
+### 添加新的记忆层
+
+1. 如需新的 **内容轴** 类型：在 `pinocchio/memory/` 下创建新文件，参考 `episodic_memory.py` 的模式（JSON 持久化 + 倒排索引 + tier 感知查询）
+2. 在 `pinocchio/models/schemas.py` 中定义对应的数据类
+3. 在 `MemoryManager` 中添加属性和操作方法
+4. **时间轴** 已通过 `MemoryTier` 枚举统一管理，无需额外代码
 
 ---
 

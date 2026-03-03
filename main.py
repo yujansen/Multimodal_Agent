@@ -13,6 +13,13 @@ Built-in commands (typed at the prompt):
     ``status``                   — print agent state as JSON
     ``reset``                    — clear session (persistent memory kept)
 
+Multimodal input:
+    Attach files with ``--image``, ``--audio``, or ``--video`` flags::
+
+        请描述这张图片 --image photo.jpg
+        总结这段录音 --audio meeting.wav
+        分析这个视频 --video lecture.mp4
+
 Optional environment variables:
     PINOCCHIO_MODEL       — LLM model name (default: qwen2.5-omni)
     OPENAI_BASE_URL       — Custom API base URL (default: http://localhost:11434/v1)
@@ -21,10 +28,30 @@ Optional environment variables:
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 
 from config import PinocchioConfig
 from pinocchio import Pinocchio
+
+
+def _parse_input(raw: str) -> tuple[str, list[str], list[str], list[str]]:
+    """Parse user input, extracting ``--image`` / ``--audio`` / ``--video`` flags.
+
+    Returns ``(text, image_paths, audio_paths, video_paths)``.
+    """
+    images: list[str] = []
+    audios: list[str] = []
+    videos: list[str] = []
+
+    pattern = r'--(image|audio|video)\s+(\S+)'
+    for match in re.finditer(pattern, raw):
+        flag, path = match.group(1), match.group(2)
+        {"image": images, "audio": audios, "video": videos}[flag].append(path)
+
+    text = re.sub(pattern, '', raw).strip()
+    return text, images, audios, videos
 
 
 def main() -> None:
@@ -44,6 +71,7 @@ def main() -> None:
     print(agent.greet())
     print()
     print("输入消息与 Pinocchio 对话 (输入 'quit' 退出, 'status' 查看状态)")
+    print("支持多模态: 请描述图片 --image photo.jpg --audio clip.wav")
     print("─" * 60)
 
     while True:
@@ -61,7 +89,6 @@ def main() -> None:
             break
 
         if user_input.lower() == "status":
-            import json
             status = agent.status()
             print(json.dumps(status, ensure_ascii=False, indent=2))
             continue
@@ -71,8 +98,15 @@ def main() -> None:
             print("会话已重置（持久化记忆保留）。")
             continue
 
-        # ── Run the cognitive loop ──
-        response = agent.chat(user_input)
+        # Parse multimodal flags
+        text, images, audios, videos = _parse_input(user_input)
+
+        response = agent.chat(
+            text or None,
+            image_paths=images or None,
+            audio_paths=audios or None,
+            video_paths=videos or None,
+        )
         print(f"\n🤖 Pinocchio: {response}")
 
 

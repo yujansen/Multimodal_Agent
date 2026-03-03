@@ -128,8 +128,11 @@ class TestEpisodicMemoryEdge:
     def test_corrupted_json_raises(self, tmp_path):
         path = tmp_path / "ep.json"
         path.write_text("not valid json!!!")
-        with pytest.raises((json.JSONDecodeError, Exception)):
-            EpisodicMemory(str(path))
+        em = EpisodicMemory(str(path))
+        # Corrupted file is handled gracefully: starts empty
+        assert em.count == 0
+        # Backup file should have been created
+        assert (tmp_path / "ep.json.bak").exists()
 
     def test_find_similar_scoring(self, tmp_path):
         """Verify the similarity heuristic: +2 for task, +1 per modality."""

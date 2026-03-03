@@ -17,7 +17,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from pinocchio.models.enums import Modality, TaskType
+from pinocchio.models.enums import MemoryTier, Modality, TaskType
 from pinocchio.models.schemas import EpisodicRecord
 
 
@@ -68,9 +68,16 @@ class EpisodicMemory:
 
     def _load(self) -> None:
         if self._path.exists():
-            with open(self._path, "r", encoding="utf-8") as f:
-                raw: list[dict[str, Any]] = json.load(f)
-            self._episodes = [EpisodicRecord.from_dict(d) for d in raw]
+            try:
+                with open(self._path, "r", encoding="utf-8") as f:
+                    raw: list[dict[str, Any]] = json.load(f)
+                self._episodes = [EpisodicRecord.from_dict(d) for d in raw]
+            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                # Corrupted file — start fresh but preserve the bad file
+                import shutil
+                backup = self._path.with_suffix(".json.bak")
+                shutil.copy2(self._path, backup)
+                self._episodes = []
         self._rebuild_indices()
 
     def save(self) -> None:
@@ -196,3 +203,38 @@ class EpisodicMemory:
             if len(lessons) >= limit:
                 break
         return lessons[:limit]
+
+    # ------------------------------------------------------------------
+    # Tier-aware queries (temporal axis)
+    # ------------------------------------------------------------------
+
+    def get_by_tier(self, tier: MemoryTier) -> list[EpisodicRecord]:
+        """Return all episodes at a given temporal tier."""
+        return [ep for ep in self._episodes if ep.memory_tier == tier]
+
+    def get_persistent(self) -> list[EpisodicRecord]:
+        """Return landmark episodes that are permanently stored."""
+        return self.get_by_tier(MemoryTier.PERSISTENT)
+
+    def promote_to_persistent(self, episode_id: str) -> bool:
+        """Promote an episode to persistent tier (never pruned)."""
+        ep = self.get(episode_id)
+        if ep is None:
+            return False
+        ep.memory_tier = MemoryTier.PERSISTENT
+        self.save()
+        return True
+
+    def consolidate_high_value(self, score_threshold: int = 8) -> list[EpisodicRecord]:
+        """Identify long-term episodes that should be promoted to persistent.
+
+        Episodes with high outcome scores and meaningful lessons are
+        candidates for permanent retention.
+        """
+        candidates = [
+            ep for ep in self._episodes
+            if ep.memory_tier == MemoryTier.LONG_TERM
+            and ep.outcome_score >= score_threshold
+            and ep.lessons
+        ]
+        return candidates
